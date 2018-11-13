@@ -7,13 +7,13 @@ import (
 
 var SHARD_COUNT = 32
 
-// A "thread" safe map of type string:Anything.
+// A "thread" safe map of type int64:Anything.
 // To avoid lock bottlenecks this map is dived to several (SHARD_COUNT) map shards.
 type ConcurrentMap []*ConcurrentMapShared
 
-// A "thread" safe string to anything map.
+// A "thread" safe int64 to anything map.
 type ConcurrentMapShared struct {
-	items        map[string]interface{}
+	items        map[int64]interface{}
 	sync.RWMutex // Read Write mutex, guards access to internal map.
 }
 
@@ -21,17 +21,17 @@ type ConcurrentMapShared struct {
 func New() ConcurrentMap {
 	m := make(ConcurrentMap, SHARD_COUNT)
 	for i := 0; i < SHARD_COUNT; i++ {
-		m[i] = &ConcurrentMapShared{items: make(map[string]interface{})}
+		m[i] = &ConcurrentMapShared{items: make(map[int64]interface{})}
 	}
 	return m
 }
 
 // Returns shard under given key
-func (m ConcurrentMap) GetShard(key string) *ConcurrentMapShared {
-	return m[uint(fnv32(key))%uint(SHARD_COUNT)]
+func (m ConcurrentMap) GetShard(key int64) *ConcurrentMapShared {
+	return m[uint(key)%uint(SHARD_COUNT)]
 }
 
-func (m ConcurrentMap) MSet(data map[string]interface{}) {
+func (m ConcurrentMap) MSet(data map[int64]interface{}) {
 	for key, value := range data {
 		shard := m.GetShard(key)
 		shard.Lock()
@@ -41,7 +41,7 @@ func (m ConcurrentMap) MSet(data map[string]interface{}) {
 }
 
 // Sets the given value under the specified key.
-func (m ConcurrentMap) Set(key string, value interface{}) {
+func (m ConcurrentMap) Set(key int64, value interface{}) {
 	// Get map shard.
 	shard := m.GetShard(key)
 	shard.Lock()
@@ -56,7 +56,7 @@ func (m ConcurrentMap) Set(key string, value interface{}) {
 type UpsertCb func(exist bool, valueInMap interface{}, newValue interface{}) interface{}
 
 // Insert or Update - updates existing element or inserts a new one using UpsertCb
-func (m ConcurrentMap) Upsert(key string, value interface{}, cb UpsertCb) (res interface{}) {
+func (m ConcurrentMap) Upsert(key int64, value interface{}, cb UpsertCb) (res interface{}) {
 	shard := m.GetShard(key)
 	shard.Lock()
 	v, ok := shard.items[key]
@@ -67,7 +67,7 @@ func (m ConcurrentMap) Upsert(key string, value interface{}, cb UpsertCb) (res i
 }
 
 // Sets the given value under the specified key if no value was associated with it.
-func (m ConcurrentMap) SetIfAbsent(key string, value interface{}) bool {
+func (m ConcurrentMap) SetIfAbsent(key int64, value interface{}) bool {
 	// Get map shard.
 	shard := m.GetShard(key)
 	shard.Lock()
@@ -80,7 +80,7 @@ func (m ConcurrentMap) SetIfAbsent(key string, value interface{}) bool {
 }
 
 // Retrieves an element from map under given key.
-func (m ConcurrentMap) Get(key string) (interface{}, bool) {
+func (m ConcurrentMap) Get(key int64) (interface{}, bool) {
 	// Get shard
 	shard := m.GetShard(key)
 	shard.RLock()
@@ -103,7 +103,7 @@ func (m ConcurrentMap) Count() int {
 }
 
 // Looks up an item under specified key
-func (m ConcurrentMap) Has(key string) bool {
+func (m ConcurrentMap) Has(key int64) bool {
 	// Get shard
 	shard := m.GetShard(key)
 	shard.RLock()
@@ -114,7 +114,7 @@ func (m ConcurrentMap) Has(key string) bool {
 }
 
 // Removes an element from the map.
-func (m ConcurrentMap) Remove(key string) {
+func (m ConcurrentMap) Remove(key int64) {
 	// Try to get shard.
 	shard := m.GetShard(key)
 	shard.Lock()
@@ -124,12 +124,12 @@ func (m ConcurrentMap) Remove(key string) {
 
 // RemoveCb is a callback executed in a map.RemoveCb() call, while Lock is held
 // If returns true, the element will be removed from the map
-type RemoveCb func(key string, v interface{}, exists bool) bool
+type RemoveCb func(key int64, v interface{}, exists bool) bool
 
 // RemoveCb locks the shard containing the key, retrieves its current value and calls the callback with those params
 // If callback returns true and element exists, it will remove it from the map
 // Returns the value returned by the callback (even if element was not present in the map)
-func (m ConcurrentMap) RemoveCb(key string, cb RemoveCb) bool {
+func (m ConcurrentMap) RemoveCb(key int64, cb RemoveCb) bool {
 	// Try to get shard.
 	shard := m.GetShard(key)
 	shard.Lock()
@@ -143,7 +143,7 @@ func (m ConcurrentMap) RemoveCb(key string, cb RemoveCb) bool {
 }
 
 // Removes an element from the map and returns it
-func (m ConcurrentMap) Pop(key string) (v interface{}, exists bool) {
+func (m ConcurrentMap) Pop(key int64) (v interface{}, exists bool) {
 	// Try to get shard.
 	shard := m.GetShard(key)
 	shard.Lock()
@@ -160,7 +160,7 @@ func (m ConcurrentMap) IsEmpty() bool {
 
 // Used by the Iter & IterBuffered functions to wrap two variables together over a channel,
 type Tuple struct {
-	Key string
+	Key int64
 	Val interface{}
 }
 
@@ -228,9 +228,9 @@ func fanIn(chans []chan Tuple, out chan Tuple) {
 	close(out)
 }
 
-// Returns all items as map[string]interface{}
-func (m ConcurrentMap) Items() map[string]interface{} {
-	tmp := make(map[string]interface{})
+// Returns all items as map[int64]interface{}
+func (m ConcurrentMap) Items() map[int64]interface{} {
+	tmp := make(map[int64]interface{})
 
 	// Insert items to temporary map.
 	for item := range m.IterBuffered() {
@@ -244,7 +244,7 @@ func (m ConcurrentMap) Items() map[string]interface{} {
 // maps. RLock is held for all calls for a given shard
 // therefore callback sess consistent view of a shard,
 // but not across the shards
-type IterCb func(key string, v interface{})
+type IterCb func(key int64, v interface{})
 
 // Callback based iterator, cheapest way to read
 // all elements in a map.
@@ -259,10 +259,10 @@ func (m ConcurrentMap) IterCb(fn IterCb) {
 	}
 }
 
-// Return all keys as []string
-func (m ConcurrentMap) Keys() []string {
+// Return all keys as []int64
+func (m ConcurrentMap) Keys() []int64 {
 	count := m.Count()
-	ch := make(chan string, count)
+	ch := make(chan int64, count)
 	go func() {
 		// Foreach shard.
 		wg := sync.WaitGroup{}
@@ -283,7 +283,7 @@ func (m ConcurrentMap) Keys() []string {
 	}()
 
 	// Generate keys
-	keys := make([]string, 0, count)
+	keys := make([]int64, 0, count)
 	for k := range ch {
 		keys = append(keys, k)
 	}
@@ -293,7 +293,7 @@ func (m ConcurrentMap) Keys() []string {
 //Reviles ConcurrentMap "private" variables to json marshal.
 func (m ConcurrentMap) MarshalJSON() ([]byte, error) {
 	// Create a temporary map, which will hold all item spread across shards.
-	tmp := make(map[string]interface{})
+	tmp := make(map[int64]interface{})
 
 	// Insert items to temporary map.
 	for item := range m.IterBuffered() {
@@ -302,25 +302,15 @@ func (m ConcurrentMap) MarshalJSON() ([]byte, error) {
 	return json.Marshal(tmp)
 }
 
-func fnv32(key string) uint32 {
-	hash := uint32(2166136261)
-	const prime32 = uint32(16777619)
-	for i := 0; i < len(key); i++ {
-		hash *= prime32
-		hash ^= uint32(key[i])
-	}
-	return hash
-}
-
 // Concurrent map uses Interface{} as its value, therefor JSON Unmarshal
 // will probably won't know which to type to unmarshal into, in such case
-// we'll end up with a value of type map[string]interface{}, In most cases this isn't
+// we'll end up with a value of type map[int64]interface{}, In most cases this isn't
 // out value type, this is why we've decided to remove this functionality.
 
 // func (m *ConcurrentMap) UnmarshalJSON(b []byte) (err error) {
 // 	// Reverse process of Marshal.
 
-// 	tmp := make(map[string]interface{})
+// 	tmp := make(map[int64]interface{})
 
 // 	// Unmarshal into a single map.
 // 	if err := json.Unmarshal(b, &tmp); err != nil {
